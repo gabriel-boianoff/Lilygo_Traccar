@@ -114,6 +114,10 @@ bool waitForModem() {
   for (int i = 0; i < 20; i++) {
     if (sendAT("AT", "OK", 500)) {
       SerialMon.println("[INFO] Modem responded to AT.");
+      String imei = sendATGet("AT+CGSN", 1500);
+      imei.replace("OK", ""); // Clean up the modem's 'OK' response
+      imei.trim();            // Remove invisible newlines
+      SerialMon.println("[INFO] Modem initialized. IMEI: " + imei);
       return true;
     }
     delay(500);
@@ -197,73 +201,52 @@ static bool convertToDecimalDegrees(const String &nmea, float &result) {
   return true;
 }
 
-static String convertUtcToPst(int year, int month, int day, int hour, int minute, int second) {
-  hour -= 8; // UTC-8
-
-  if (hour < 0) {
-    hour += 24;
-    day -= 1;
-
-    if (day < 1) {
-      month -= 1;
-      if (month < 1) {
-        month = 12;
-        year -= 1;
-      }
-      int daysInMonth[] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
-      bool leap = (year % 4 == 0);
-      if (leap) daysInMonth[1] = 29;
-      day = daysInMonth[month - 1];
-    }
-  }
-
-  char buf[32];
-  sprintf(buf, "%04d-%02d-%02dT%02d:%02d:%02d",
-          year, month, day, hour, minute, second);
-  return String(buf);
-}
-
 static String buildGpsDateTime(const String &dateStr, const String &timeStr) {
+  // Parses NMEA GPS time (DDMMYY and HHMMSS) into standard YYYY-MM-DDTHH:MM:SS
   if (dateStr.length() < 6 || timeStr.length() < 6) return "";
 
-  int day   = dateStr.substring(0, 2).toInt();
-  int month = dateStr.substring(2, 4).toInt();
-  int year  = 2000 + dateStr.substring(4, 6).toInt();
+  String dd = dateStr.substring(0, 2);
+  String mm = dateStr.substring(2, 4);
+  String yy = "20" + dateStr.substring(4, 6);
 
-  int hour   = timeStr.substring(0, 2).toInt();
-  int minute = timeStr.substring(2, 4).toInt();
-  int second = timeStr.substring(4, 6).toInt();
+  String hh  = timeStr.substring(0, 2);
+  String min = timeStr.substring(2, 4);
+  String ss  = timeStr.substring(4, 6);
 
-  return convertUtcToPst(year, month, day, hour, minute, second);
+  return yy + "-" + mm + "-" + dd + "T" + hh + ":" + min + ":" + ss;
 }
 
 static String getNetworkDateTime() {
+  // Parses Cellular Network time "yy/MM/dd,hh:mm:ss±zz" into YYYY-MM-DDTHH:MM:SS
   String resp = sendATGet("AT+CCLK?", 3000);
   int firstQuote = resp.indexOf('"');
   int secondQuote = resp.indexOf('"', firstQuote + 1);
+  
   if (firstQuote >= 0 && secondQuote > firstQuote) {
     String raw = resp.substring(firstQuote + 1, secondQuote);
-    return raw;
+    if (raw.length() >= 17) {
+      String yy = "20" + raw.substring(0, 2);
+      String mm = raw.substring(3, 5);
+      String dd = raw.substring(6, 8);
+      String hh = raw.substring(9, 11);
+      String min = raw.substring(12, 14);
+      String ss = raw.substring(15, 17);
+      
+      return yy + "-" + mm + "-" + dd + "T" + hh + ":" + min + ":" + ss;
+    }
   }
-  return "";
+  return "2000-01-01T00:00:00"; // Fallback if network time fails
 }
 
 static bool getGps(float &latitude, float &longitude, float &speedKmh, String &datetime) {
   String resp = sendATGet("AT+CGPSINFO", 3000);
-
   int idx = resp.indexOf("+CGPSINFO:");
-  if (idx == -1) {
-    SerialMon.println("[GPS] No +CGPSINFO line.");
-    return false;
-  }
+  if (idx == -1) return false;
 
   String line = resp.substring(idx + 10);
   line.trim();
 
-  if (line.startsWith(",")) {
-    SerialMon.println("[GPS] No fix yet (empty).");
-    return false;
-  }
+  if (line.startsWith(",")) return false; // No fix yet
 
   String parts[12];
   int partIndex = 0;
@@ -274,13 +257,8 @@ static bool getGps(float &latitude, float &longitude, float &speedKmh, String &d
       start = i + 1;
     }
   }
-  if (partIndex < 12 && start < (int)line.length()) {
-    parts[partIndex++] = line.substring(start);
-  }
-  if (partIndex < 8) {
-    SerialMon.println("[GPS] Unexpected CGPSINFO format.");
-    return false;
-  }
+  if (partIndex < 12 && start < (int)line.length()) parts[partIndex++] = line.substring(start);
+  if (partIndex < 8) return false;
 
   String latStr   = parts[0];
   String latNS    = parts[1];
@@ -291,6 +269,7 @@ static bool getGps(float &latitude, float &longitude, float &speedKmh, String &d
   String speedStr = parts[7];
 
   float flat, flon;
+  // (Assuming your convertToDecimalDegrees function is still right above this)
   if (!convertToDecimalDegrees(latStr, flat)) return false;
   if (!convertToDecimalDegrees(lonStr, flon)) return false;
 
@@ -299,33 +278,16 @@ static bool getGps(float &latitude, float &longitude, float &speedKmh, String &d
 
   latitude  = flat;
   longitude = flon;
-
-  float speedKnots = speedStr.toFloat();
-  speedKmh = speedKnots * 1.852f;
-
-  datetime = buildGpsDateTime(dateStr, timeStr);
-
-  SerialMon.print("[GPS] ");
-  SerialMon.print(latitude, 6);
-  SerialMon.print(", ");
-  SerialMon.print(longitude, 6);
-  SerialMon.print("  speed=");
-  SerialMon.print(speedKmh, 2);
-  SerialMon.print(" km/h  datetime=");
-  SerialMon.println(datetime);
+  speedKmh = speedStr.toFloat() * 1.852f; // Knots to km/h
+  datetime = buildGpsDateTime(dateStr, timeStr); // Pure UTC
 
   return true;
 }
 
 static bool getLbs(float &latitude, float &longitude, float &speedKmh, String &datetime) {
-  SerialMon.println("[LBS] Requesting location (AT+CLBS=1,1)...");
   String resp = sendATGet("AT+CLBS=1,1", 15000);
-
   int idx = resp.indexOf("+CLBS:");
-  if (idx == -1) {
-    SerialMon.println("[LBS] No +CLBS line.");
-    return false;
-  }
+  if (idx == -1) return false;
 
   String line = resp.substring(idx + 7);
   line.trim();
@@ -341,35 +303,13 @@ static bool getLbs(float &latitude, float &longitude, float &speedKmh, String &d
       start = i + 1;
     }
   }
-  if (partIndex < 4 && start < (int)line.length()) {
-    parts[partIndex++] = line.substring(start);
-  }
-
-  if (partIndex < 4) {
-    SerialMon.println("[LBS] Unexpected CLBS format.");
-    return false;
-  }
-
-  int err = parts[0].toInt();
-  if (err != 0) {
-    SerialMon.print("[LBS] Error code: ");
-    SerialMon.println(err);
-    return false;
-  }
+  if (partIndex < 4 && start < (int)line.length()) parts[partIndex++] = line.substring(start);
+  if (partIndex < 4 || parts[0].toInt() != 0) return false;
 
   latitude  = parts[1].toFloat();
   longitude = parts[2].toFloat();
   speedKmh  = 0.0f;
-  datetime  = getNetworkDateTime();
-
-  SerialMon.print("[LBS] ");
-  SerialMon.print(latitude, 6);
-  SerialMon.print(", ");
-  SerialMon.print(longitude, 6);
-  SerialMon.print("  speed=");
-  SerialMon.print(speedKmh, 2);
-  SerialMon.print(" km/h  datetime=");
-  SerialMon.println(datetime);
+  datetime  = getNetworkDateTime(); // Pure UTC from Cell Tower
 
   return true;
 }
@@ -384,4 +324,85 @@ bool getLocation(float &latitude, float &longitude, float &speedKmh, String &dat
     return true;
   }
   return false;
+}
+
+// =====================================================
+// UDP Sockets (Traccar)
+// =====================================================
+
+bool sendUdpData(const String &server, int port, const String &payload) {
+  SerialMon.println("[UDP] Opening local socket...");
+  
+  // SIMCOM UDP Quirk: We DO NOT put the AWS server IP here. 
+  // We just open an arbitrary local UDP port (e.g., 5013).
+  String openCmd = "AT+CIPOPEN=0,\"UDP\",,,5013";
+  String r = sendATGet(openCmd, 8000);
+  
+  if (r.indexOf("+CIPOPEN: 0,0") < 0 && r.indexOf("already") < 0 && r.indexOf("OK") < 0) {
+    SerialMon.println("[UDP] Open failed.");
+    return false;
+  }
+
+  SerialMon.println("[UDP] Sending payload...");
+  
+  // SIMCOM UDP Quirk: The AWS server IP and Port must be passed HERE in the CIPSEND command!
+  String sendCmd = "AT+CIPSEND=0," + String(payload.length()) + ",\"" + server + "\"," + String(port);
+  SerialAT.println(sendCmd);
+  
+  unsigned long start = millis();
+  bool gotPrompt = false;
+  r = "";
+  
+  // Wait for the '>' prompt before sending actual data
+  while(millis() - start < 3000) {
+    while(SerialAT.available()) {
+      r += (char)SerialAT.read();
+    }
+    if(r.indexOf('>') >= 0) { 
+      gotPrompt = true; 
+      break; 
+    }
+    if(r.indexOf("ERROR") >= 0) {
+      break;
+    }
+  }
+
+  if (!gotPrompt) {
+    SerialMon.println("[UDP] No '>' prompt received.");
+    sendATGet("AT+CIPCLOSE=0", 2000); // Clean up
+    return false;
+  }
+
+  // Send the actual H02 string
+  SerialAT.print(payload);
+  
+  start = millis();
+  bool sendOk = false;
+  r = "";
+  
+  // Wait for confirmation that the modem sent the bytes over the network
+  while(millis() - start < 5000) {
+    while(SerialAT.available()) {
+      r += (char)SerialAT.read();
+    }
+    if(r.indexOf("OK") >= 0 || r.indexOf("+CIPSEND: 0,") >= 0) { 
+      sendOk = true; 
+      break; 
+    }
+    if(r.indexOf("ERROR") >= 0) {
+      break;
+    }
+  }
+
+  if (sendOk) {
+    SerialMon.println("[UDP] Send OK.");
+  } else {
+    SerialMon.println("[UDP] Send failed.");
+  }
+
+  // Immediately close the socket to save data
+  SerialMon.println("[UDP] Closing socket...");
+  sendATGet("AT+CIPCLOSE=0", 3000);
+  
+  return sendOk;
 }

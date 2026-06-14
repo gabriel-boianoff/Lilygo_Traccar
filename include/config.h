@@ -20,19 +20,21 @@ constexpr int BAT_EN_PIN  = 12;   // enable for divider
 // “Heartbeat” LED (external LED recommended on this pin)
 constexpr int BOARD_LED_PIN = 2;
 
-// Relay we’ll control via RPC
+// Relay (keeping the pin defined so main.cpp can safely pull it low)
 constexpr int RELAY_PIN = 5;
 
-// ---------- Network / ThingsBoard ----------
-constexpr char APN[]        = "iot.1nce.net";            // 1NCE APN
-constexpr char TB_HOST[]    = "mqtt.thingsboard.cloud";
-constexpr int  TB_PORT      = 1883;
+// ---------- Network / Traccar ----------
+constexpr char APN[]               = "iot.1nce.net";    // 1NCE APN
 
-// Device token
-constexpr char TB_TOKEN[]      = "qHpyL8Ts3XjeDj0MzIiE";
-constexpr char TB_CLIENT_ID[]  = "lilygo-tsim7670g-s3-gps01";
-constexpr char TB_TOPIC[]      = "v1/devices/me/telemetry";
+// REPLACE THIS with your actual Traccar server IP or Domain!
+constexpr char TRACCAR_HOST[]      = "52.41.62.55"; 
+
+// 5013 is the port for the lightweight H02 UDP protocol in Traccar
+constexpr int  TRACCAR_PORT        = 5013;              
+
+// This must exactly match the "Identifier" you create for the device in Traccar
+constexpr char TRACCAR_DEVICE_ID[] = "864643060473974";        
 
 // Timing
-constexpr uint32_t AT_CMD_TIMEOUT               = 10000;
+constexpr uint32_t AT_CMD_TIMEOUT              = 10000;
 constexpr uint32_t DEFAULT_PUBLISH_INTERVAL_MS = 20000;   // 20s

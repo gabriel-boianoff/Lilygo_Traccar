@@ -15,3 +15,6 @@ bool setupLTE();
 bool startGNSS();
 bool getLocation(float &latitude, float &longitude, float &speedKmh,
                  String &datetime, String &source);
+
+// Raw UDP Socket
+bool sendUdpData(const String &server, int port, const String &payload);

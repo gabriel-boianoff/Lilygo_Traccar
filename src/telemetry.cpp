@@ -1,4 +1,6 @@
 #include "telemetry.h"
+#include "config.h"
+#include "modem.h"
 
 static bool trackerActive = true;  // true = normal, false = “off/sleep”
 
@@ -10,19 +12,7 @@ bool isTrackerActive() {
   return trackerActive;
 }
 
-void handleTelemetryLoop(bool &mqttReady, unsigned long &lastLocationPublish) {
-  if (!mqttReady) {
-    SerialMon.println("[MQTT] Not ready, retrying connect...");
-    if (!mqttConnectThingsBoard()) {
-      SerialMon.println("[MQTT] Reconnect failed, retry in 10s.");
-      delay(10000);
-      return;
-    }
-    mqttReady = true;
-    lastLocationPublish = millis();
-  }
-
-  // 🔴 If tracker is “off”, keep MQTT alive but do NOT send telemetry
+void handleTelemetryLoop(unsigned long &lastLocationPublish) {
   if (!trackerActive) {
     return;
   }
@@ -41,27 +31,60 @@ void handleTelemetryLoop(bool &mqttReady, unsigned long &lastLocationPublish) {
     getBatteryFromAdc(batteryLevel, batteryMv, batteryStatus);
 
     if (getLocation(latitude, longitude, speedKmh, datetime, source)) {
-      String json = String("{\"latitude\":")      + String(latitude,  6) +
-                    ",\"longitude\":"            + String(longitude, 6) +
-                    ",\"speed\":"                + String(speedKmh,  2) +
-                    ",\"datetime\":\""           + datetime + "\"" +
-                    ",\"source\":\""             + source   + "\"" +
-                    ",\"battery_level\":"        + String(batteryLevel) +
-                    ",\"battery_status\":\""     + batteryStatus + "\"" +
-                    ",\"battery_voltage_mv\":"   + String(batteryMv) +
-                    "}";
+      
+      String timeStr = "000000";
+      String dateStr = "010170"; // Default epoch
+      
+      // We now receive standardized YYYY-MM-DDTHH:MM:SS in pure UTC from modem.cpp
+      if (datetime.length() >= 19) {
+        String yy = datetime.substring(2, 4);
+        String mm = datetime.substring(5, 7);
+        String dd = datetime.substring(8, 10);
+        String hh = datetime.substring(11, 13);
+        String min = datetime.substring(14, 16);
+        String ss = datetime.substring(17, 19);
+        
+        dateStr = dd + mm + yy;    // DDMMYY
+        timeStr = hh + min + ss;   // HHMMSS
+      }
 
-      SerialMon.print("[INFO] Telemetry: ");
-      SerialMon.println(json);
+      String validity = (source == "gps") ? "A" : "V";
 
-      if (!mqttPublish(TB_TOPIC, json)) {
-        SerialMon.println("[MQTT] Publish failed, marking not ready.");
-        mqttReady = false;
-      } else {
-        // Blink LED on success (assuming active-LOW)
+      // Convert Decimal Degrees back to DDMM.MMMM for the strict H02 parser
+      char latDir = (latitude >= 0) ? 'N' : 'S';
+      float absLat = abs(latitude);
+      int latDeg = (int)absLat;
+      float latMin = (absLat - latDeg) * 60.0f;
+
+      char lonDir = (longitude >= 0) ? 'E' : 'W';
+      float absLon = abs(longitude);
+      int lonDeg = (int)absLon;
+      float lonMin = (absLon - lonDeg) * 60.0f;
+
+      // Build the properly formatted H02 UDP String
+      // Notice the %06.2f for the speed parameter!
+      char h02Buffer[128];
+      snprintf(h02Buffer, sizeof(h02Buffer),
+               "*HQ,%s,V1,%s,%s,%02d%07.4f,%c,%03d%07.4f,%c,%06.2f,000,%s,FFFFFFFF#",
+               TRACCAR_DEVICE_ID,
+               timeStr.c_str(),
+               validity.c_str(),
+               latDeg, latMin, latDir,
+               lonDeg, lonMin, lonDir,
+               speedKmh,
+               dateStr.c_str());
+
+      String payload = String(h02Buffer);
+
+      SerialMon.print("[INFO] Telemetry UDP: ");
+      SerialMon.println(payload);
+
+      if (sendUdpData(TRACCAR_HOST, TRACCAR_PORT, payload)) {
         digitalWrite(BOARD_LED_PIN, LOW);   // ON
         delay(150);
         digitalWrite(BOARD_LED_PIN, HIGH);  // OFF
+      } else {
+        SerialMon.println("[WARN] UDP send failed.");
       }
     } else {
       SerialMon.println("[WARN] No GPS/LBS location available, skipping publish.");

@@ -12,9 +12,9 @@ bool isTrackerActive() {
   return trackerActive;
 }
 
-void handleTelemetryLoop(unsigned long &lastLocationPublish) {
+bool handleTelemetryLoop(unsigned long &lastLocationPublish) {
   if (!trackerActive) {
-    return;
+    return true; // Not an error, just turned off
   }
 
   if (millis() - lastLocationPublish >= DEFAULT_PUBLISH_INTERVAL_MS) {
@@ -83,11 +83,15 @@ void handleTelemetryLoop(unsigned long &lastLocationPublish) {
         digitalWrite(BOARD_LED_PIN, LOW);   // ON
         delay(150);
         digitalWrite(BOARD_LED_PIN, HIGH);  // OFF
+        return true;  // SUCCESS
       } else {
         SerialMon.println("[WARN] UDP send failed.");
+        return false; // FAILURE! This adds to the udpFailCount
       }
     } else {
       SerialMon.println("[WARN] No GPS/LBS location available, skipping publish.");
+      return true; // No fix isn't a network error, keep waiting
     }
   }
+  return true; // If interval hasn't passed, report all good
 }

@@ -42,6 +42,7 @@ bool sendAT(const String &cmd, const String &expect, uint32_t timeout) {
   return false;
 }
 
+// Returns the full modem response for a given command, without any parsing or checks
 String sendATGet(const String &cmd, uint32_t timeout) {
   while (SerialAT.available()) SerialAT.read();
 
@@ -60,6 +61,12 @@ String sendATGet(const String &cmd, uint32_t timeout) {
     while (SerialAT.available()) {
       char c = (char)SerialAT.read();
       resp += c;
+    }
+    
+    // NEW EARLY EXIT LOGIC:
+    // If the response ends in OK or ERROR, the modem is done talking.
+    if (resp.indexOf("OK\r\n") >= 0 || resp.indexOf("ERROR\r\n") >= 0) {
+      break; 
     }
   }
 
@@ -333,13 +340,16 @@ bool getLocation(float &latitude, float &longitude, float &speedKmh, String &dat
 bool sendUdpData(const String &server, int port, const String &payload) {
   SerialMon.println("[UDP] Opening local socket...");
   
-  // SIMCOM UDP Quirk: We DO NOT put the AWS server IP here. 
-  // We just open an arbitrary local UDP port (e.g., 5013).
+  // Forcefully close any lingering stuck socket before opening
+  sendAT("AT+CIPCLOSE=0", "OK", 2000); 
+
   String openCmd = "AT+CIPOPEN=0,\"UDP\",,,5013";
   String r = sendATGet(openCmd, 8000);
   
-  if (r.indexOf("+CIPOPEN: 0,0") < 0 && r.indexOf("already") < 0 && r.indexOf("OK") < 0) {
+  // Accept 0,2 (Already Opened) as a successful state
+  if (r.indexOf("+CIPOPEN: 0,0") < 0 && r.indexOf("+CIPOPEN: 0,2") < 0 && r.indexOf("OK") < 0) {
     SerialMon.println("[UDP] Open failed.");
+    sendAT("AT+CIPCLOSE=0", "OK", 2000); // Clean up on fail
     return false;
   }
 

@@ -5,7 +5,7 @@
 #include "battery.h"
 
 // Periodic telemetry handler - ONLY ONE ARGUMENT NOW
-void handleTelemetryLoop(unsigned long &lastLocationPublish);
+bool handleTelemetryLoop(unsigned long &lastLocationPublish);
 
 // Tracker “on/off” logical state
 void setTrackerActive(bool active);

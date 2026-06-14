@@ -17,6 +17,7 @@ enum TrackerState {
 TrackerState currentState = STATE_INIT_HARDWARE;
 unsigned long lastLocationPublish = 0;
 unsigned long errorTimer = 0;
+unsigned int udpFailCount = 0;
 
 void setup() {
   SerialMon.begin(115200);
@@ -78,10 +79,19 @@ void loop() {
 
     case STATE_READY:
       // Normal operating loop
-      handleTelemetryLoop(lastLocationPublish);
-      
-      // Future upgrade: If UDP fails X times in a row, we could transition 
-      // back to STATE_SETUP_NETWORK to re-establish the connection.
+      if (!handleTelemetryLoop(lastLocationPublish)) {
+          udpFailCount++;
+          SerialMon.print("[WARN] UDP Failure count: ");
+          SerialMon.println(udpFailCount);
+      } else {
+          udpFailCount = 0; // Reset on success or idle
+      }
+
+      if (udpFailCount >= 3) {
+          SerialMon.println("[RECOVERY] Multiple UDP failures. Resetting network connection...");
+          udpFailCount = 0;
+          currentState = STATE_SETUP_NETWORK; // Kick it back to the LTE setup phase
+      }
       break;
 
     case STATE_ERROR:
